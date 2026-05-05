@@ -156,7 +156,7 @@ Target gpu_memory_utilization: 0.254
 ## Notes
 
 - **Estimates are approximate.** Actual vLLM usage may vary slightly due to internal alignment, CUDA allocator fragmentation, and runtime overhead.
-- **MTP heads are included in base parameters.** Multi-Token Prediction (MTP) architectures like Grok already include MTP head weights in their reported parameter count — no separate calculation is needed.
+- **MTP heads are included in base parameters.** Multi-Token Prediction (MTP) architectures like Grok already include MTP head weights in their reported parameter count — no separate calculation is needed. MTP increases compute during generation but has no meaningful impact on static VRAM.
 - **Draft KV cache is transient.** In speculative decoding, the draft model's KV cache is discarded after each verification step and does not contribute to static VRAM usage.
 - **`n_predict` does not affect VRAM.** This parameter controls throughput (how many tokens the draft model proposes per step) but has no impact on static memory.
 - **KV cache quantization** (FP8 KV cache) requires a compatible vLLM build and GPU hardware.
