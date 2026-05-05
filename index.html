@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced vLLM Memory Estimator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f5f3ff',
+                            100: '#ede9fe',
+                            200: '#ddd6fe',
+                            300: '#c4b5fd',
+                            400: '#a78bfa',
+                            500: '#8b5cf6',
+                            600: '#7c3aed',
+                            700: '#6d28d9',
+                            800: '#5b21b6',
+                            900: '#4c1d95',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        input[type="number"] {
+            -moz-appearance: textfield;
+        }
+        .spec-decoding-fields {
+            transition: opacity 0.2s ease, max-height 0.3s ease;
+        }
+        .spec-decoding-fields.hidden {
+            opacity: 0;
+            max-height: 0;
+            overflow: hidden;
+            pointer-events: none;
+        }
+        .spec-decoding-fields.visible {
+            opacity: 1;
+            max-height: 500px;
+        }
+        .result-row-anim {
+            transition: opacity 0.2s ease;
+        }
+        .modal-overlay {
+            transition: opacity 0.2s ease;
+        }
+        .modal-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        .modal-overlay.visible {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .modal-content {
+            transition: transform 0.2s ease;
+        }
+        .modal-overlay.hidden .modal-content {
+            transform: scale(0.95);
+        }
+        .modal-overlay.visible .modal-content {
+            transform: scale(1);
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-slate-100 to-slate-200 min-h-screen">
+
+    <div class="max-w-6xl mx-auto px-4 py-8 sm:py-12">
+
+        <!-- Header -->
+        <header class="text-center mb-10">
+            <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 text-white mb-4 shadow-lg shadow-brand-500/25">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+                </svg>
+            </div>
+            <h1 class="text-3xl sm:text-4xl font-bold text-slate-900 tracking-tight">vLLM Memory Estimator</h1>
+            <p class="mt-2 text-slate-500 text-lg">Calculate GPU VRAM footprint and optimize <code class="bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded text-sm font-mono">gpu_memory_utilization</code></p>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+            <!-- Input Panel -->
+            <div class="lg:col-span-2 space-y-5">
+
+                <!-- Hardware & Setup -->
+                <section class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                    <div class="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center gap-2 justify-between">
+                        <div class="flex items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-brand-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
+                            </svg>
+                            <h2 class="text-sm font-semibold text-slate-700 uppercase tracking-wide">Hardware & Setup</h2>
+                        </div>
+                        <button class="info-btn text-slate-400 hover:text-brand-500 transition-colors" data-section="hardware" aria-label="Info about Hardware & Setup">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-600 mb-1.5" for="vram">Total GPU VRAM (GB)</label>
+                            <input type="number" id="vram" value="128" step="1"
+                                class="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-shadow text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-600 mb-1.5" for="overhead">Static Overhead (GB)</label>
+                            <input type="number" id="overhead" value="1.5" step="0.1"
+                                class="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-shadow text-sm">
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Base Model Specs -->
+                <section class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                    <div class="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center gap-2 justify-between">
+                        <div class="flex items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-brand-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
+                            </svg>
+                            <h2 class="text-sm font-semibold text-slate-700 uppercase tracking-wide">Base Model Specs</h2>
+                        </div>
+                        <button class="info-btn text-slate-400 hover:text-brand-500 transition-colors" data-section="basemodel" aria-label="Info about Base Model Specs">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-600 mb-1.5" for="params">Base Parameters (Billions)</label>
+                            <input type="number" id="params" value="27" step="1"
+                                class="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-shadow text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-600 mb-1.5" for="weightQuant">Weight Quantization</label>
+                            <select id="weightQuant"
+                                class="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-shadow text-sm bg-white">
+                                <option value="2">FP16 / BF16 (2 Bytes)</option>
+                                <option value="1" selected>FP8 (1 Byte)</option>
+                                <option value="0.5">INT4 (0.5 Bytes)</option>
+                            </select>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Model Architecture -->
+                <section class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                    <div class="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center gap-2 justify-between">
+                        <div class="flex items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-brand-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                            </svg>
+                            <h2 class="text-sm font-semibold text-slate-700 uppercase tracking-wide">Model Architecture</h2>
+                        </div>
+                        <button class="info-btn text-slate-400 hover:text-brand-500 transition-colors" data-section="architecture" aria-label="Info about Model Architecture">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="p-5 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-600 mb-1.5" for="layers">Number of Layers</label>
+                            <input type="number" id="layers" value="64" step="1"
+                                class="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-shadow text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-600 mb-1.5" for="kvHeads">KV Heads</label>
+                            <input type="number" id="kvHeads" value="4" step="1"
+                                class="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-shadow text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-600 mb-1.5" for="headDim">Head Dimension</label>
+                            <input type="number" id="headDim" value="256" step="8"
+                                class="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-shadow text-sm">
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Context & Concurrency -->
+                <section class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                    <div class="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center gap-2 justify-between">
+                        <div class="flex items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-brand-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                            </svg>
+                            <h2 class="text-sm font-semibold text-slate-700 uppercase tracking-wide">Context & Concurrency</h2>
+                        </div>
+                        <button class="info-btn text-slate-400 hover:text-brand-500 transition-colors" data-section="context" aria-label="Info about Context & Concurrency">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="p-5 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-600 mb-1.5" for="contextLen">Max Context Length (Tokens)</label>
+                            <input type="number" id="contextLen" value="262144" step="1024"
+                                class="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-shadow text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-600 mb-1.5" for="maxSeqs">Max Sequences (Users/Agents)</label>
+                            <input type="number" id="maxSeqs" value="1" step="1"
+                                class="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-shadow text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-600 mb-1.5" for="kvQuant">KV Cache Quantization</label>
+                            <select id="kvQuant"
+                                class="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-shadow text-sm bg-white">
+                                <option value="2" selected>FP16 / BF16 (2 Bytes)</option>
+                                <option value="1">FP8 (1 Byte)</option>
+                            </select>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Advanced -->
+                <section class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                    <div class="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center gap-2 justify-between">
+                        <div class="flex items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-brand-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            </svg>
+                            <h2 class="text-sm font-semibold text-slate-700 uppercase tracking-wide">Advanced: MoE, LoRA & Engine</h2>
+                        </div>
+                        <button class="info-btn text-slate-400 hover:text-brand-500 transition-colors" data-section="advanced" aria-label="Info about Advanced settings">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-600 mb-1.5" for="moeExperts">MoE Experts (1 = Dense)</label>
+                            <input type="number" id="moeExperts" value="1" step="1" min="1"
+                                class="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-shadow text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-600 mb-1.5" for="loraParams">LoRA Adapter Params (B)</label>
+                            <input type="number" id="loraParams" value="0" step="0.1"
+                                class="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-shadow text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-600 mb-1.5" for="numBeams">Number of Beams</label>
+                            <input type="number" id="numBeams" value="1" step="1" min="1"
+                                class="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-shadow text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-600 mb-1.5" for="blockSize">PagedAttention Block Size</label>
+                            <select id="blockSize"
+                                class="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-shadow text-sm bg-white">
+                                <option value="8">8 Tokens</option>
+                                <option value="16" selected>16 Tokens</option>
+                                <option value="32">32 Tokens</option>
+                            </select>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Speculative Decoding -->
+                <section class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                    <div class="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center gap-2 justify-between">
+                        <div class="flex items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-brand-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                            </svg>
+                            <h2 class="text-sm font-semibold text-slate-700 uppercase tracking-wide">Speculative Decoding</h2>
+                        </div>
+                        <button class="info-btn text-slate-400 hover:text-brand-500 transition-colors" data-section="specdec" aria-label="Info about Speculative Decoding">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="p-5">
+                        <div class="flex items-center gap-3 mb-4">
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="enableSpecDec" class="sr-only peer">
+                                <div class="w-11 h-6 bg-slate-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-500"></div>
+                            </label>
+                            <span class="text-sm font-medium text-slate-700">Enable Speculative Decoding</span>
+                        </div>
+                        <div id="specDecFields" class="spec-decoding-fields hidden grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-600 mb-1.5" for="draftParams">Draft Model Params (B)</label>
+                                <input type="number" id="draftParams" value="3" step="0.1"
+                                    class="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-shadow text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-600 mb-1.5" for="draftWeightQuant">Draft Weight Quantization</label>
+                                <select id="draftWeightQuant"
+                                    class="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-shadow text-sm bg-white">
+                                    <option value="2">FP16 / BF16 (2 Bytes)</option>
+                                    <option value="1" selected>FP8 (1 Byte)</option>
+                                    <option value="0.5">INT4 (0.5 Bytes)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-600 mb-1.5" for="draftMoEExperts">Draft MoE Experts (1 = Dense)</label>
+                                <input type="number" id="draftMoEExperts" value="1" step="1" min="1"
+                                    class="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-shadow text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-600 mb-1.5" for="nPredict">n_predict (Draft Tokens/Step)</label>
+                                <input type="number" id="nPredict" value="5" step="1" min="1"
+                                    class="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-shadow text-sm">
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+            </div>
+
+            <!-- Results Panel -->
+            <div class="lg:col-span-1">
+                <div class="sticky top-6">
+
+                    <!-- VRAM Breakdown Card -->
+                    <div class="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden mb-5">
+                        <div class="px-5 py-3.5 bg-gradient-to-r from-brand-600 to-brand-700 text-white flex items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                            </svg>
+                            <h3 class="text-sm font-semibold uppercase tracking-wide">Memory Breakdown</h3>
+                        </div>
+                        <div class="p-5 space-y-3">
+
+                            <!-- Model Weights -->
+                            <div>
+                                <div class="flex justify-between items-center">
+                                    <span class="text-sm text-slate-600">Model Weights</span>
+                                    <span class="text-sm font-semibold text-slate-900 font-mono" id="outWeights">0.00 GB</span>
+                                </div>
+                                <div class="text-xs text-slate-400 mt-0.5 pl-1">↳ Effective: <span class="font-mono" id="outEffParams">0 B</span></div>
+                            </div>
+
+                            <!-- Draft Model Weights -->
+                            <div id="draftWeightsRow" class="result-row-anim hidden">
+                                <div class="flex justify-between items-center">
+                                    <span class="text-sm text-slate-600">Draft Model Weights</span>
+                                    <span class="text-sm font-semibold text-slate-900 font-mono" id="outDraftWeights">0.00 GB</span>
+                                </div>
+                                <div class="text-xs text-slate-400 mt-0.5 pl-1">↳ Effective: <span class="font-mono" id="outDraftEffParams">0 B</span></div>
+                            </div>
+
+                            <!-- KV Cache -->
+                            <div>
+                                <div class="flex justify-between items-center">
+                                    <span class="text-sm text-slate-600">KV Cache</span>
+                                    <span class="text-sm font-semibold text-slate-900 font-mono" id="outKvCache">0.00 GB</span>
+                                </div>
+                                <div class="text-xs text-slate-400 mt-0.5 pl-1">↳ Eff. Seqs: <span class="font-mono" id="outEffSeqs">0</span></div>
+                            </div>
+
+                            <!-- Static Overhead -->
+                            <div>
+                                <div class="flex justify-between items-center">
+                                    <span class="text-sm text-slate-600">Static Overhead</span>
+                                    <span class="text-sm font-semibold text-slate-900 font-mono" id="outOverhead">0.00 GB</span>
+                                </div>
+                            </div>
+
+                            <!-- Divider -->
+                            <div class="border-t border-slate-200 pt-3">
+                                <div class="flex justify-between items-center">
+                                    <span class="text-base font-bold text-slate-900">Total Required</span>
+                                    <span class="text-lg font-bold text-slate-900 font-mono" id="outTotal">0.00 GB</span>
+                                </div>
+                            </div>
+
+                            <!-- VRAM Usage Bar -->
+                            <div>
+                                <div class="flex justify-between items-center mb-1.5">
+                                    <span class="text-xs text-slate-500">VRAM Usage</span>
+                                    <span class="text-xs font-mono text-slate-500" id="outVramPercent">0%</span>
+                                </div>
+                                <div class="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
+                                    <div id="vramBar" class="bg-brand-500 h-2.5 rounded-full transition-all duration-300" style="width: 0%"></div>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+
+                    <!-- Target Utilization Card -->
+                    <div class="bg-gradient-to-br from-brand-600 to-brand-800 rounded-xl shadow-lg text-white overflow-hidden">
+                        <div class="p-5">
+                            <div class="text-xs font-semibold uppercase tracking-wide text-brand-200 mb-1">Target Setting</div>
+                            <div class="text-sm text-brand-100 mb-3">gpu_memory_utilization</div>
+                            <div class="text-4xl font-bold font-mono tracking-tight" id="outUtilization">0.000</div>
+                            <div class="mt-3 text-xs text-brand-200">
+                                Pass to vLLM: <code class="bg-white/20 px-1.5 py-0.5 rounded font-mono">--gpu-memory-utilization <span id="outUtilizationCode">0.000</span></code>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Warning -->
+                    <div class="warning hidden mt-4 bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3" id="warningBox">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                        <div>
+                            <div class="text-sm font-semibold text-red-800">VRAM Exceeded</div>
+                            <div class="text-xs text-red-600 mt-0.5">Total required VRAM exceeds available physical VRAM. Reduce context, concurrency, or model size.</div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Footer -->
+        <footer class="mt-12 text-center text-xs text-slate-400">
+            <p>Based on vLLM's PagedAttention memory pre-allocation strategy. Estimates are approximate.</p>
+        </footer>
+
+    </div>
+
+    <!-- Info Modal -->
+    <div id="infoModal" class="modal-overlay hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+        <div class="modal-content bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[80vh] overflow-hidden flex flex-col">
+            <div class="px-6 py-4 bg-gradient-to-r from-brand-600 to-brand-700 text-white flex items-center justify-between flex-shrink-0">
+                <h3 id="modalTitle" class="text-lg font-semibold">Section Details</h3>
+                <button id="modalClose" class="text-white/80 hover:text-white transition-colors" aria-label="Close modal">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+            <div id="modalBody" class="p-6 overflow-y-auto space-y-4">
+            </div>
+        </div>
+    </div>
+
+<script>
+    function calculateMemory() {
+        // Hardware
+        const vram = parseFloat(document.getElementById('vram').value) || 0;
+        const overhead = parseFloat(document.getElementById('overhead').value) || 0;
+
+        // Base Specs
+        const baseParams = parseFloat(document.getElementById('params').value) || 0;
+        const weightBytes = parseFloat(document.getElementById('weightQuant').value) || 2;
+
+        // Architecture
+        const layers = parseFloat(document.getElementById('layers').value) || 0;
+        const kvHeads = parseFloat(document.getElementById('kvHeads').value) || 0;
+        const headDim = parseFloat(document.getElementById('headDim').value) || 0;
+
+        // Context
+        const contextLen = parseFloat(document.getElementById('contextLen').value) || 0;
+        const maxSeqs = parseFloat(document.getElementById('maxSeqs').value) || 0;
+        const kvBytes = parseFloat(document.getElementById('kvQuant').value) || 2;
+
+        // Advanced
+        const moeExperts = parseFloat(document.getElementById('moeExperts').value) || 1;
+        const loraParams = parseFloat(document.getElementById('loraParams').value) || 0;
+        const numBeams = parseFloat(document.getElementById('numBeams').value) || 1;
+        const blockSize = parseFloat(document.getElementById('blockSize').value) || 16;
+
+        // Speculative Decoding
+        const enableSpecDec = document.getElementById('enableSpecDec').checked;
+        const draftParams = parseFloat(document.getElementById('draftParams').value) || 0;
+        const draftWeightBytes = parseFloat(document.getElementById('draftWeightQuant').value) || 2;
+        const draftMoEExperts = parseFloat(document.getElementById('draftMoEExperts').value) || 1;
+
+        // --- Core Math Logic ---
+
+        // 1. Effective Parameters (MoE approximation + LoRA)
+        const moeMultiplier = 0.333 + (0.667 * moeExperts);
+        const effectiveParams = (baseParams * moeMultiplier) + loraParams;
+        const weightsGB = effectiveParams * weightBytes;
+
+        // 2. Draft Model Weights (Speculative Decoding)
+        let draftWeightsGB = 0;
+        let draftEffParams = 0;
+        if (enableSpecDec) {
+            const draftMoeMultiplier = 0.333 + (0.667 * draftMoEExperts);
+            draftEffParams = draftParams * draftMoeMultiplier;
+            draftWeightsGB = draftEffParams * draftWeightBytes;
+        }
+
+        // 3. Effective Context (PagedAttention block rounding)
+        const effectiveContext = Math.ceil(contextLen / blockSize) * blockSize;
+
+        // 4. Effective Concurrency (Multiplier from Beam Search)
+        const effectiveSeqs = maxSeqs * numBeams;
+
+        // 5. KV Cache Calculation
+        const kvCacheBytes = 2 * layers * kvHeads * headDim * effectiveContext * effectiveSeqs * kvBytes;
+        const kvCacheGB = kvCacheBytes / Math.pow(1024, 3);
+
+        // 6. Totals
+        const totalGB = weightsGB + draftWeightsGB + kvCacheGB + overhead;
+        const utilization = totalGB / vram;
+
+        // --- Update DOM ---
+        document.getElementById('outWeights').innerText = weightsGB.toFixed(2) + ' GB';
+        document.getElementById('outEffParams').innerText = effectiveParams.toFixed(2) + ' B';
+
+        const draftWeightsRow = document.getElementById('draftWeightsRow');
+        if (enableSpecDec) {
+            draftWeightsRow.classList.remove('hidden');
+            draftWeightsRow.style.display = '';
+            document.getElementById('outDraftWeights').innerText = draftWeightsGB.toFixed(2) + ' GB';
+            document.getElementById('outDraftEffParams').innerText = draftEffParams.toFixed(2) + ' B';
+        } else {
+            draftWeightsRow.classList.add('hidden');
+            draftWeightsRow.style.display = 'none';
+        }
+
+        document.getElementById('outKvCache').innerText = kvCacheGB.toFixed(2) + ' GB';
+        document.getElementById('outEffSeqs').innerText = effectiveSeqs;
+        document.getElementById('outOverhead').innerText = overhead.toFixed(2) + ' GB';
+        document.getElementById('outTotal').innerText = totalGB.toFixed(2) + ' GB';
+
+        // Utilization
+        const utilEl = document.getElementById('outUtilization');
+        const utilCodeEl = document.getElementById('outUtilizationCode');
+        const utilValue = utilization.toFixed(3);
+        utilEl.innerText = utilValue;
+        utilCodeEl.innerText = utilValue;
+
+        // VRAM bar
+        const vramPercent = Math.min((totalGB / vram) * 100, 100);
+        const vramBar = document.getElementById('vramBar');
+        const vramPercentEl = document.getElementById('outVramPercent');
+        vramBar.style.width = vramPercent + '%';
+        vramPercentEl.innerText = vramPercent.toFixed(1) + '%';
+
+        // Color coding
+        const warningBox = document.getElementById('warningBox');
+        if (totalGB > vram) {
+            vramBar.className = 'h-2.5 rounded-full transition-all duration-300 bg-red-500';
+            utilEl.className = 'text-4xl font-bold font-mono tracking-tight text-red-200';
+            warningBox.classList.remove('hidden');
+        } else if (utilization > 0.9) {
+            vramBar.className = 'h-2.5 rounded-full transition-all duration-300 bg-amber-500';
+            utilEl.className = 'text-4xl font-bold font-mono tracking-tight';
+            warningBox.classList.add('hidden');
+        } else {
+            vramBar.className = 'h-2.5 rounded-full transition-all duration-300 bg-brand-500';
+            utilEl.className = 'text-4xl font-bold font-mono tracking-tight';
+            warningBox.classList.add('hidden');
+        }
+    }
+
+    // Attach event listeners
+    const inputs = document.querySelectorAll('input, select');
+    inputs.forEach(input => {
+        input.addEventListener('input', calculateMemory);
+        input.addEventListener('change', calculateMemory);
+    });
+
+    // Speculative decoding toggle
+    const specDecToggle = document.getElementById('enableSpecDec');
+    const specDecFields = document.getElementById('specDecFields');
+    specDecToggle.addEventListener('change', function() {
+        if (this.checked) {
+            specDecFields.classList.remove('hidden');
+            specDecFields.classList.add('visible');
+        } else {
+            specDecFields.classList.remove('visible');
+            specDecFields.classList.add('hidden');
+        }
+        calculateMemory();
+    });
+
+    // Initial calculation
+    calculateMemory();
+
+    // --- Info Modal ---
+    const sectionInfo = {
+        hardware: {
+            title: 'Hardware & Setup',
+            fields: [
+                {
+                    name: 'Total GPU VRAM (GB)',
+                    desc: 'The total amount of GPU video memory available on your system. For example, an A100 80GB has 80 GB, an RTX 4090 has 24 GB, and Apple M2/M3 Max chips with unified memory report their total system RAM here since CPU and GPU share the same pool.'
+                },
+                {
+                    name: 'Static Overhead (GB)',
+                    desc: 'Memory consumed by vLLM and CUDA that is not part of model weights or KV cache. This includes the CUDA context, tokenizer model, CUDA kernels, PagedAttention block table metadata, and Python runtime overhead. Typical values range from 0.5 GB to 2 GB depending on your system.'
+                }
+            ]
+        },
+        basemodel: {
+            title: 'Base Model Specs',
+            fields: [
+                {
+                    name: 'Base Parameters (Billions)',
+                    desc: 'The total number of parameters in the model. For a dense model, this is the straightforward count (e.g., Llama-3-70B = 70). For MoE models, this is the "base" parameter count as reported by the model card, and the MoE Experts setting below will scale it to the true loaded weight size.'
+                },
+                {
+                    name: 'Weight Quantization',
+                    desc: 'The precision format used to store model weights. FP16/BF16 uses 2 bytes per parameter (full precision). FP8 uses 1 byte (half the memory, minimal quality loss for inference). INT4 uses 0.5 bytes (quarter memory, noticeable quality trade-off). The quantization level must be supported by your vLLM build and GPU hardware.'
+                }
+            ]
+        },
+        architecture: {
+            title: 'Model Architecture',
+            fields: [
+                {
+                    name: 'Number of Layers',
+                    desc: 'The number of transformer blocks (layers) in the model. Each layer stores its own KV cache, so this directly multiplies the KV cache size. Common values: 32 (small models), 40-48 (medium), 64-80 (large models).'
+                },
+                {
+                    name: 'KV Heads',
+                    desc: 'The number of Key-Value attention heads. Models using Grouped Query Attention (GQA) have fewer KV heads than attention heads, which reduces KV cache size significantly. For example, Llama-3-70B has 64 attention heads but only 8 KV heads. Check the model\'s config.json for "num_key_value_heads".'
+                },
+                {
+                    name: 'Head Dimension',
+                    desc: 'The size of each attention head vector. This is typically the model\'s hidden size divided by the number of attention heads. Common values are 128, 256, or 512. Larger head dimensions increase KV cache size proportionally.'
+                }
+            ]
+        },
+        context: {
+            title: 'Context & Concurrency',
+            fields: [
+                {
+                    name: 'Max Context Length (Tokens)',
+                    desc: 'The maximum number of tokens (input + output) the model can process in a single sequence. This is the primary driver of KV cache size. A 262K context window will use ~4x more KV cache than a 64K window. Note: vLLM will round this up to the nearest PagedAttention block boundary.'
+                },
+                {
+                    name: 'Max Sequences (Users/Agents)',
+                    desc: 'The maximum number of concurrent sequences (requests) vLLM will serve simultaneously. Each sequence gets its own KV cache, so doubling this doubles the KV cache footprint. This corresponds to vLLM\'s --max-num_seqs parameter.'
+                },
+                {
+                    name: 'KV Cache Quantization',
+                    desc: 'The precision used to store KV cache tensors. FP16/BF16 (2 bytes) is the default and preserves full quality. FP8 (1 byte) halves the KV cache size with minimal quality impact. Not all vLLM builds support KV cache quantization — it requires a compatible build and GPU.'
+                }
+            ]
+        },
+        advanced: {
+            title: 'Advanced: MoE, LoRA & Engine',
+            fields: [
+                {
+                    name: 'MoE Experts',
+                    desc: 'Number of expert networks in a Mixture-of-Experts model. Set to 1 for dense models. MoE models replicate FFN weights per expert while sharing attention weights. The calculator approximates this as: ~33% attention (shared) + ~67% FFN (replicated per expert). For example, a model with 8 experts will have roughly 5.33x the effective parameter count.'
+                },
+                {
+                    name: 'LoRA Adapter Params (B)',
+                    desc: 'Additional parameters from LoRA fine-tuning adapters loaded alongside the base model. These are stored in VRAM as delta weights and add directly to the weight footprint. If you\'re not using LoRA, leave this at 0.'
+                },
+                {
+                    name: 'Number of Beams',
+                    desc: 'Beam search width. Each beam maintains its own KV cache, so 4 beams = 4x the KV cache per sequence. This multiplies with Max Sequences. Set to 1 for standard greedy or sampling decoding.'
+                },
+                {
+                    name: 'PagedAttention Block Size',
+                    desc: 'vLLM divides the KV cache into fixed-size blocks (8, 16, or 32 tokens). Context length is rounded up to the nearest block boundary, so a 262,144 context with block size 16 has no waste, but a 262,150 context would round up to 262,160. Larger block sizes reduce metadata overhead but can waste more tokens per sequence.'
+                }
+            ]
+        },
+        specdec: {
+            title: 'Speculative Decoding',
+            fields: [
+                {
+                    name: 'Enable Speculative Decoding',
+                    desc: 'When enabled, a smaller "draft" model generates candidate tokens that the main model verifies in parallel, increasing throughput. The draft model\'s weights load into VRAM alongside the target model, adding to the static footprint. The draft model\'s KV cache is transient (discarded after verification) and is not included in the calculation.'
+                },
+                {
+                    name: 'Draft Model Params (B)',
+                    desc: 'Parameter count of the draft model. A good rule of thumb is to use a draft model roughly 5-10x smaller than the target model. For example, a 3B draft model paired with a 27B target model. The same MoE scaling formula applies if the draft model is also MoE.'
+                },
+                {
+                    name: 'Draft Weight Quantization',
+                    desc: 'Precision format for the draft model weights, same as the target model. FP8 is recommended to minimize the draft model\'s VRAM footprint since the draft model doesn\'t need full precision.'
+                },
+                {
+                    name: 'Draft MoE Experts',
+                    desc: 'Number of experts in the draft model, if it uses MoE architecture. Set to 1 for dense draft models.'
+                },
+                {
+                    name: 'n_predict (Draft Tokens/Step)',
+                    desc: 'How many tokens the draft model proposes per verification step. This affects throughput (higher = more speculative tokens to verify) but does NOT affect static VRAM usage since the draft KV cache is transient. Typical values are 3-8. This field is informational only and does not change the memory calculation.'
+                }
+            ]
+        }
+    };
+
+    const modal = document.getElementById('infoModal');
+    const modalTitle = document.getElementById('modalTitle');
+    const modalBody = document.getElementById('modalBody');
+    const modalClose = document.getElementById('modalClose');
+
+    function openModal(section) {
+        const info = sectionInfo[section];
+        if (!info) return;
+        modalTitle.innerText = info.title;
+        modalBody.innerHTML = '<dl class="space-y-4">' + info.fields.map(f =>
+            '<div><dt class="text-sm font-semibold text-slate-900">' + f.name + '</dt><dd class="text-sm text-slate-600 mt-1">' + f.desc + '</dd></div>'
+        ).join('') + '</dl>';
+        modal.classList.remove('hidden');
+        modal.classList.add('visible');
+    }
+
+    function closeModal() {
+        modal.classList.remove('visible');
+        modal.classList.add('hidden');
+    }
+
+    // Info button clicks
+    document.querySelectorAll('.info-btn').forEach(btn => {
+        btn.addEventListener('click', () => openModal(btn.dataset.section));
+    });
+
+    // Close button
+    modalClose.addEventListener('click', closeModal);
+
+    // Click outside to close
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeModal();
+    });
+
+    // Escape key to close
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && modal.classList.contains('visible')) closeModal();
+    });
+</script>
+
+</body>
+</html>

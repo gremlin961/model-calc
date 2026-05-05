@@ -1,0 +1,49 @@
+# LLM Context: Advanced vLLM Memory Estimator
+
+## Purpose
+This file provides context for LLMs, autonomous agents, and AI coding assistants analyzing this repository.
+
+## Background & Development Context
+This tool was developed to solve a specific infrastructure challenge: optimizing a 128GB unified RAM system (DGX Spark) to run multiple LLMs concurrently using vLLM.
+The initial constraint involved running a `Qwen3.6-27B-FP8` model (native FP8 weights) alongside a second model, requiring aggressive tuning of the `gpu_memory_utilization`, `max_model_len`, and `max_num_seqs` parameters to preserve a massive 256k context window for agentic code development.
+
+## Architectural Assumptions & Formulas
+The core logic of the calculator is built on vLLM's memory pre-allocation behavior:
+
+1. **vLLM Pre-allocation:** vLLM grabs a percentage of total GPU VRAM upfront (defined by `gpu_memory_utilization`).
+2. **Weights Calculation (MoE + LoRA):**
+   - MoE multiplier: `0.333 + (0.667 * num_experts)` — ~33% attention weights are shared, ~67% FFN weights replicate per expert.
+   - Effective params: `(base_params * moe_multiplier) + lora_params`
+   - Weights VRAM: `effective_params * bytes_per_weight`
+3. **Speculative Decoding (Draft Model):**
+   - Draft model weights load alongside target model, adding permanent VRAM overhead.
+   - Draft effective params: `draft_params * draft_moe_multiplier`
+   - Draft weights VRAM: `draft_eff_params * draft_bytes_per_weight`
+   - Draft KV cache is transient (verification tokens are discarded) — not included in static footprint.
+   - `n_predict` is informational only (affects throughput, not static VRAM).
+4. **KV Cache Calculation (PagedAttention + Beam Search):**
+   - Block rounding: `effective_context = ceil(context_len / block_size) * block_size`
+   - Beam multiplier: `effective_seqs = max_seqs * num_beams`
+   - Formula: `(2 * layers * kv_heads * head_dim * effective_context * effective_seqs * bytes_per_kv_element) / 1024^3`
+   - The `2` accounts for both Key and Value tensors.
+5. **Utilization Target:** The recommended `gpu_memory_utilization` is calculated as `(Total Required Memory) / (Total System VRAM)`.
+
+## Qwen3.6-27B Default State
+The calculator's default values are pre-loaded with the exact architecture of Qwen3.6-27B to demonstrate how deep layers and large head dimensions impact the KV cache:
+* **Parameters:** 27B
+* **Weights:** Native FP8
+* **Layers:** 64
+* **KV Heads:** 4
+* **Head Dimension:** 256
+* **Target Context Length:** 262,144 tokens
+* **MoE Experts:** 1 (dense model)
+* **LoRA Params:** 0
+* **Beams:** 1
+* **Block Size:** 16 tokens
+* **Speculative Decoding:** Disabled
+
+## Technical Implementation
+* **Stack:** Pure HTML, CSS (system fonts, CSS variables), and Vanilla JavaScript.
+* **Design:** Zero-dependency, single-file architecture. Client-side execution only.
+* **Advanced Parameters:** MoE experts, LoRA adapter size, beam search count, PagedAttention block size, and speculative decoding draft model are all exposed as user-configurable inputs.
+* **MTP Note:** Multi-Token Prediction (MTP) heads are already included in a model's total parameter count — no separate calculation needed.
