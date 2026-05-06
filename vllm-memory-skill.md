@@ -24,35 +24,32 @@ Estimate the GPU VRAM footprint for Large Language Models served via vLLM, accou
 | `contextLen` | number | 262144 | Maximum context length in tokens |
 | `maxSeqs` | number | 1 | Maximum concurrent sequences (vLLM `--max-num-seqs`) |
 | `kvBytes` | number | 2 | Bytes per KV cache element: 2 (FP16/BF16), 1 (FP8) |
-| `moeExperts` | number | 1 | Number of MoE experts (1 = dense model) |
 | `loraParams` | number | 0 | LoRA adapter parameters in billions |
 | `numBeams` | number | 1 | Beam search width (1 = greedy/sampling) |
 | `blockSize` | number | 16 | PagedAttention block size in tokens (8, 16, or 32) |
 | `enableSpecDec` | boolean | false | Enable speculative decoding with a draft model |
 | `draftParams` | number | 3 | Draft model parameters in billions |
 | `draftWeightBytes` | number | 1 | Bytes per draft weight: 2 (FP16/BF16), 1 (FP8), 0.5 (INT4) |
-| `draftMoEExperts` | number | 1 | Number of MoE experts in draft model (1 = dense) |
 | `nPredict` | number | 5 | Draft tokens per step (informational, does not affect VRAM) |
 
 ## Calculation Steps
 
 Perform the following steps in order. Use exact floating-point arithmetic.
 
-### Step 1: MoE Multiplier & Effective Parameters
+### Step 1: Effective Parameters
 ```
-moeMultiplier = 0.333 + (0.667 * moeExperts)
-effectiveParams = (baseParams * moeMultiplier) + loraParams
+effectiveParams = baseParams + loraParams
 weightsGB = effectiveParams * weightBytes
 ```
-- ~33% of weights are in attention layers (shared across experts)
-- ~67% of weights are in FFN layers (replicated per expert)
+- For MoE models, `baseParams` is the TOTAL loaded parameters (what's actually in VRAM), not the active count.
+- Example: Qwen3.6-35B-A3B → enter 35. Mixtral 8x7B → enter 46.7.
 
 ### Step 2: Draft Model Weights (if `enableSpecDec` is true)
 ```
-draftMoeMultiplier = 0.333 + (0.667 * draftMoEExperts)
-draftEffParams = draftParams * draftMoeMultiplier
+draftEffParams = draftParams
 draftWeightsGB = draftEffParams * draftWeightBytes
 ```
+- For MoE draft models, `draftParams` is the TOTAL loaded parameters.
 - If speculative decoding is disabled, `draftWeightsGB = 0`
 - Draft KV cache is transient (discarded after verification) — not included
 
@@ -116,14 +113,12 @@ If `totalGB > vram`, indicate that the configuration exceeds available VRAM.
 | contextLen | 262144 |
 | maxSeqs | 1 |
 | kvBytes | 2 (FP16) |
-| moeExperts | 1 |
 | loraParams | 0 |
 | numBeams | 1 |
 | blockSize | 16 |
 | enableSpecDec | false |
 
-**Step 1:** MoE multiplier = 0.333 + (0.667 × 1) = 1.0
-Effective params = (27 × 1.0) + 0 = 27 B
+**Step 1:** Effective params = 27 + 0 = 27 B
 Weights = 27 × 1 = **27.00 GB**
 
 **Step 2:** Speculative decoding disabled → draft weights = **0.00 GB**

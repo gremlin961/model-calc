@@ -10,7 +10,7 @@ It specifically helps you determine the optimal `gpu_memory_utilization` setting
 * **Comprehensive Metrics:** Breaks down memory usage into Model Weights, KV Cache, and Static Overhead, with sub-metrics for effective parameters and effective concurrent sequences.
 * **vLLM Specific:** Calculates the exact `gpu_memory_utilization` fraction required for your specific hardware configuration.
 * **Quantization Support:** Adjust weight and KV cache precision (FP16/BF16, FP8, INT4) to see the immediate impact on memory.
-* **MoE Support:** Accounts for Mixture-of-Experts models where FFN weights are replicated per expert (~67% of params scale with expert count, ~33% attention params are shared).
+* **MoE Support:** Enter the total loaded parameters (what's actually in VRAM). For example, Qwen3.6-35B-A3B → enter 35, Mixtral 8x7B → enter 46.7.
 * **LoRA Support:** Adds LoRA adapter parameter overhead to the total weight footprint.
 * **Speculative Decoding:** Adds draft model weight VRAM (including MoE scaling for draft model). The draft model's KV cache is transient and not included in static footprint.
 * **Beam Search:** Multiplies KV cache by the number of beams.
@@ -27,9 +27,9 @@ This tool is a self-contained HTML file. No build steps or web servers are requi
 The calculator uses the following formula to estimate vLLM's memory footprint:
 `Total Memory = Model Weights + KV Cache Pool + Static Overhead`
 
-### Weight Calculation (MoE + LoRA)
-* **MoE Multiplier:** `0.333 + (0.667 * num_experts)` — approximates that ~33% of weights are in attention (shared across experts) and ~67% are in FFN (replicated per expert).
-* **Effective Params:** `(base_params * moe_multiplier) + lora_params`
+### Weight Calculation
+* **Base Parameters:** Enter the TOTAL loaded parameters (what's actually in VRAM). For MoE models, this is the total parameter count, not the active count.
+* **Effective Params:** `base_params + lora_params`
 * **Weights VRAM:** `effective_params * bytes_per_weight`
 
 ### Speculative Decoding (Draft Model)

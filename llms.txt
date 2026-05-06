@@ -11,13 +11,13 @@ The initial constraint involved running a `Qwen3.6-27B-FP8` model (native FP8 we
 The core logic of the calculator is built on vLLM's memory pre-allocation behavior:
 
 1. **vLLM Pre-allocation:** vLLM grabs a percentage of total GPU VRAM upfront (defined by `gpu_memory_utilization`).
-2. **Weights Calculation (MoE + LoRA):**
-   - MoE multiplier: `0.333 + (0.667 * num_experts)` — ~33% attention weights are shared, ~67% FFN weights replicate per expert.
-   - Effective params: `(base_params * moe_multiplier) + lora_params`
+2. **Weights Calculation:**
+   - Enter the TOTAL loaded parameters (what's actually in VRAM). For MoE models, this is the total parameter count, not the active count (e.g., Qwen3.6-35B-A3B → 35, Mixtral 8x7B → 46.7).
+   - Effective params: `base_params + lora_params`
    - Weights VRAM: `effective_params * bytes_per_weight`
 3. **Speculative Decoding (Draft Model):**
    - Draft model weights load alongside target model, adding permanent VRAM overhead.
-   - Draft effective params: `draft_params * draft_moe_multiplier`
+   - Draft effective params: `draft_params` (enter total loaded parameters for MoE draft models).
    - Draft weights VRAM: `draft_eff_params * draft_bytes_per_weight`
    - Draft KV cache is transient (verification tokens are discarded) — not included in static footprint.
    - `n_predict` is informational only (affects throughput, not static VRAM).
